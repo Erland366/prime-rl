@@ -6,13 +6,11 @@ from prime_rl.configs.shared import PrimeMonitorConfig, WandbWithExtrasConfig
 from prime_rl.utils.config import BaseConfig
 from prime_rl.utils.monitor.base import Monitor, NoOpMonitor
 from prime_rl.utils.monitor.multi import MultiMonitor
-from prime_rl.utils.monitor.prime import PrimeMonitor
 from prime_rl.utils.monitor.wandb import WandbMonitor
 
 __all__ = [
     "Monitor",
     "WandbMonitor",
-    "PrimeMonitor",
     "MultiMonitor",
     "NoOpMonitor",
     "setup_monitor",
@@ -63,6 +61,8 @@ def setup_monitor(
         )
 
     if prime_config is not None:
+        from prime_rl.utils.monitor.prime import PrimeMonitor
+
         monitors.append(
             PrimeMonitor(
                 config=prime_config,

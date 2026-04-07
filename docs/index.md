@@ -12,5 +12,6 @@ This directory maintains the documentation for PRIME-RL. It is organized into th
 - [**Checkpointing**](checkpointing.md) - Saving and resuming training from checkpoints
 - [**Benchmarking**](benchmarking.md) - Performance benchmarking and throughput measurement
 - [**Deployment**](deployment.md) - Training deployment on single-GPU, multi-GPU, and multi-node clusters
+- [**AMD Install**](amd.md) - ROCm install path validated for MI210 / gfx90a SFT and single-node RL smoke runs
 - [**Kubernetes**](kubernetes.md) - Deploying PRIME-RL on Kubernetes with Helm
 - [**Troubleshooting**](troubleshooting.md) - Common issues and their solutions

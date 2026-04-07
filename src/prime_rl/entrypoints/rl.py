@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -9,8 +10,13 @@ from pathlib import Path
 from subprocess import Popen
 from threading import Event, Thread
 
-import pynvml
 import tomli_w
+import torch
+
+try:
+    import pynvml
+except ImportError:
+    pynvml = None
 
 from prime_rl.configs.rl import RLConfig
 from prime_rl.utils.config import cli
@@ -30,14 +36,46 @@ ORCHESTRATOR_TOML = "orchestrator.toml"
 INFERENCE_TOML = "inference.toml"
 TEACHER_INFERENCE_TOML = "teacher_inference.toml"
 
+logger = logging.getLogger(__name__)
+
+
+def _parse_visible_devices(raw_visible: str | None) -> list[int] | None:
+    if raw_visible is None:
+        return None
+    return [int(token.strip()) for token in raw_visible.split(",") if token.strip()]
+
+
+def _get_visible_gpu_ids() -> list[int] | None:
+    return _parse_visible_devices(os.environ.get("CUDA_VISIBLE_DEVICES")) or _parse_visible_devices(
+        os.environ.get("HIP_VISIBLE_DEVICES")
+    )
+
+
+def _gpu_env(gpu_ids: list[int]) -> dict[str, str]:
+    visible = ",".join(map(str, gpu_ids))
+    return {
+        "CUDA_VISIBLE_DEVICES": visible,
+        "HIP_VISIBLE_DEVICES": visible,
+    }
+
 
 def get_physical_gpu_ids() -> list[int]:
     """Return physical GPU IDs visible to the launcher."""
-    raw_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if raw_visible is None:
-        pynvml.nvmlInit()
-        return list(range(pynvml.nvmlDeviceGetCount()))
-    return [int(token.strip()) for token in raw_visible.split(",") if token.strip()]
+    visible_gpu_ids = _get_visible_gpu_ids()
+    if visible_gpu_ids is not None:
+        return visible_gpu_ids
+
+    if pynvml is not None:
+        try:
+            pynvml.nvmlInit()
+            return list(range(pynvml.nvmlDeviceGetCount()))
+        except Exception as exc:
+            logger.warning(f"Failed to query NVML, falling back to torch.cuda: {exc}")
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("No GPUs detected by torch.cuda and no visible device environment variables were set.")
+
+    return list(range(torch.cuda.device_count()))
 
 
 def write_config(config: RLConfig, output_dir: Path, exclude: set[str] | None = None) -> None:
@@ -72,7 +110,15 @@ def write_subconfigs(config: RLConfig, output_dir: Path) -> None:
 
 def check_gpus_available(gpu_ids: list[int]) -> None:
     """Raise error if there are existing processes on the specified GPUs."""
-    pynvml.nvmlInit()
+    if pynvml is None:
+        logger.warning("Skipping GPU occupancy check because pynvml is not installed.")
+        return
+
+    try:
+        pynvml.nvmlInit()
+    except Exception as exc:
+        logger.warning(f"Skipping GPU occupancy check because NVML is unavailable: {exc}")
+        return
 
     occupied = []
     for gpu_id in gpu_ids:
@@ -189,7 +235,7 @@ def rl_local(config: RLConfig):
                     inference_cmd,
                     env={
                         **os.environ,
-                        "CUDA_VISIBLE_DEVICES": ",".join(map(str, infer_gpu_ids)),
+                        **_gpu_env(infer_gpu_ids),
                     },
                     stdout=log_file,
                     stderr=log_file,
@@ -233,7 +279,7 @@ def rl_local(config: RLConfig):
                     teacher_inference_cmd,
                     env={
                         **os.environ,
-                        "CUDA_VISIBLE_DEVICES": ",".join(map(str, teacher_gpu_ids)),
+                        **_gpu_env(teacher_gpu_ids),
                     },
                     stdout=log_file,
                     stderr=log_file,
@@ -319,7 +365,7 @@ def rl_local(config: RLConfig):
                     **os.environ,
                     **wandb_shared_env,
                     "WANDB_SHARED_LABEL": "trainer",
-                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, trainer_gpu_ids)),
+                    **_gpu_env(trainer_gpu_ids),
                     "PYTHONUNBUFFERED": "1",
                     "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                     "LOGURU_FORCE_COLORS": "1",

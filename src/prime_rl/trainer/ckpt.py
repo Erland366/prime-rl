@@ -1,4 +1,5 @@
 import bisect
+import importlib.util
 import shutil
 import time
 import warnings
@@ -408,12 +409,17 @@ class WeightCheckpointManager:
             )
         else:
             # For regular transformers models, revert internal format to original HF hub format
-            from transformers.core_model_loading import revert_weight_conversion
+            if importlib.util.find_spec("transformers.core_model_loading") is not None:
+                from transformers.core_model_loading import revert_weight_conversion
 
-            self.logger.debug("Reverting transformers internal format to HF hub format for weight checkpoint")
-            start_time = time.perf_counter()
-            state_dict = revert_weight_conversion(model, state_dict)
-            self.logger.debug(f"Reverted to HF hub format in {time.perf_counter() - start_time:.2f} seconds")
+                self.logger.debug("Reverting transformers internal format to HF hub format for weight checkpoint")
+                start_time = time.perf_counter()
+                state_dict = revert_weight_conversion(model, state_dict)
+                self.logger.debug(f"Reverted to HF hub format in {time.perf_counter() - start_time:.2f} seconds")
+            else:
+                self.logger.warning(
+                    "transformers.core_model_loading is unavailable; saving gathered HF weights as-is"
+                )
 
         # Save weight checkpoint on master rank
         self.save_to_path(step_path, state_dict, lora_state_dict, model, tokenizer)

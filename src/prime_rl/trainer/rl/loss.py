@@ -10,6 +10,12 @@ from prime_rl.configs.trainer import CustomLossConfig, DefaultLossConfig, LossCo
 from prime_rl.utils.utils import import_object
 
 
+def _maybe_compile_dynamic(fn: Callable[..., Any]) -> Callable[..., Any]:
+    if torch.version.hip is not None:
+        return fn
+    return torch.compile(dynamic=True)(fn)
+
+
 @dataclass
 class LossInputs:
     """Inputs for computing loss on a single sample."""
@@ -39,7 +45,7 @@ Expected signature:
 
 
 @jaxtyped(typechecker=typechecker)
-@torch.compile(dynamic=True)
+@_maybe_compile_dynamic
 def selective_log_softmax(
     logits: Float[Tensor, "batch seq vocab"], index: Int[Tensor, "batch seq"]
 ) -> Float[Tensor, "batch seq"]:
@@ -48,7 +54,7 @@ def selective_log_softmax(
 
 
 @jaxtyped(typechecker=typechecker)
-@torch.compile(dynamic=True)
+@_maybe_compile_dynamic
 def compute_entropy(shifted_logits: Float[Tensor, "batch seq vocab"]) -> Float[Tensor, "batch seq"]:
     with torch.no_grad():
         pd = torch.nn.functional.softmax(shifted_logits, dim=-1)

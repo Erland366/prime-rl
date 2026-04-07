@@ -13,6 +13,24 @@ def setup_vllm_env(config: InferenceConfig):
     if config.enable_lora:
         os.environ["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "True"
 
+    if os.environ.get("VLLM_TARGET_DEVICE", "").lower() == "rocm":
+        import torch
+        import vllm.v1.sample.sampler as sampler
+        import vllm.v1.sample.ops.logprobs as logprobs_ops
+        from vllm.platforms.interface import Platform
+        from vllm.platforms.rocm import RocmPlatform
+
+        Platform.simple_compile_backend = "eager"
+        RocmPlatform.simple_compile_backend = "eager"
+
+        # vLLM's compiled logprob rank helper still triggers a ROCm/Triton
+        # crash on MI210 during chat completions. Keep this path eager.
+        def batched_count_greater_than_rocm(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+            return (x >= values).sum(-1)
+
+        logprobs_ops.batched_count_greater_than = batched_count_greater_than_rocm
+        sampler.batched_count_greater_than = batched_count_greater_than_rocm
+
 
 def main():
     config = cli(InferenceConfig)

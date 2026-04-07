@@ -69,12 +69,47 @@ With `[model] impl = "auto"` (the default), the trainer selects that custom stac
 
 Currently, you **need at least one NVIDIA GPU to use PRIME-RL**. If you don't already have access to one, we recommend our [compute platform](https://app.primeintellect.ai) for everything from renting on-demand single GPUs for developing, debugging and small ablations, to [reserving 1000+ GPU clusters](https://app.primeintellect.ai/dashboard/quotes) for production-scale training.
 
+For a limited ROCm path validated on `AMD Instinct MI210` / `gfx90a`, see [docs/amd.md](docs/amd.md). That flow currently covers the trainer path plus a local single-node RL smoke run on `1 infer + 3 train` GPUs.
+
 ### Quick Setup
 
 Set up PRIME-RL in a single command.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/PrimeIntellect-ai/prime-rl/main/scripts/install.sh | bash
+```
+
+For the AMD ROCm path documented above, run:
+
+```bash
+conda activate primerl
+bash scripts/install_amd.sh
+```
+
+If you want to source W&B and Hugging Face credentials from an existing `.env` file and run the validated AMD SFT command with W&B logging enabled, use:
+
+```bash
+set -a
+source /vast/users/qirong.ho/erland/Python_project/torchforge/.env
+set +a
+
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate primerl
+
+VALIDATE=0 bash scripts/install_amd.sh
+
+python -m prime_rl.entrypoints.sft @ configs/debug/sft/train.toml \
+  --output-dir outputs/amd_debug_sft_wandb \
+  --clean-output-dir \
+  --max-steps 1 \
+  --data.seq-len 128 \
+  --data.batch-size 1 \
+  --data.micro-batch-size 1 \
+  --model.name Qwen/Qwen3-0.6B \
+  --model.attn sdpa \
+  --model.debug.num-layers 2 \
+  --wandb.project prime-rl \
+  --wandb.name amd-mi210-sft-debug
 ```
 
 <details>
@@ -218,6 +253,7 @@ Check out the [docs](docs) directory for in-depth guides on how to use PRIME-RL.
 - [**Checkpointing**](docs/checkpointing.md) - Saving and resuming training from checkpoints
 - [**Benchmarking**](docs/benchmarking.md) - Performance benchmarking and throughput measurement
 - [**Deployment**](docs/deployment.md) - Training deployment on single-GPU, multi-GPU, and multi-node clusters
+- [**AMD Install**](docs/amd.md) - ROCm install path validated for MI210 / gfx90a SFT and single-node RL smoke runs
 - [**Memory Usage**](docs/memory_usage.md) - Techniques for reducing memory usage (activation checkpointing, offloading, EP, CP, LoRA, etc.)
 - [**Troubleshooting**](docs/troubleshooting.md) - Common issues and their solutions
 - [**Multimodal**](docs/multimodal.md) - Training VLMs like Qwen3-VL

@@ -1,3 +1,4 @@
+import importlib.util
 import shutil
 import time
 from pathlib import Path
@@ -47,9 +48,14 @@ class FileSystemWeightBroadcast(WeightBroadcast):
                 model.convert_to_hf(state_dict)
             else:
                 # For regular transformers models, revert internal format to original HF hub format
-                from transformers.core_model_loading import revert_weight_conversion
+                if importlib.util.find_spec("transformers.core_model_loading") is not None:
+                    from transformers.core_model_loading import revert_weight_conversion
 
-                state_dict = revert_weight_conversion(model, state_dict)
+                    state_dict = revert_weight_conversion(model, state_dict)
+                else:
+                    self.logger.warning(
+                        "transformers.core_model_loading is unavailable; broadcasting gathered HF weights as-is"
+                    )
 
         for idx in self.multi_run_manager.ready_to_update_idxs:
             self.logger.debug(

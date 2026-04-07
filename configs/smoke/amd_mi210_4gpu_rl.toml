@@ -1,0 +1,56 @@
+max_steps = 12
+max_async_level = 1
+seq_len = 256
+
+[deployment]
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 3
+num_infer_gpus = 1
+
+[wandb]
+project = "prime-rl"
+shared = true
+
+[model]
+name = "Qwen/Qwen2.5-3B-Instruct"
+
+[ckpt]
+interval = 250
+
+[trainer.model]
+attn = "sdpa"
+cp = 1
+
+[trainer.optim]
+lr = 3e-6
+
+[orchestrator]
+batch_size = 8
+rollouts_per_example = 4
+
+[orchestrator.client]
+base_url = ["http://127.0.0.1:18000/v1"]
+
+[orchestrator.sampling]
+max_completion_tokens = 32
+
+[[orchestrator.env]]
+id = "smoke-reverse-text"
+
+[orchestrator.env.args]
+num_train_examples = 1024
+num_eval_examples = 64
+min_length = 4
+max_length = 12
+seed = 0
+
+[inference]
+gpu_memory_utilization = 0.65
+
+[inference.server]
+port = 18000
+
+[inference.model]
+enforce_eager = true
+max_model_len = 256

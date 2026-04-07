@@ -1,0 +1,30 @@
+{
+  "domain": "research",
+  "version": "1.0.0",
+  "created": "2026-04-07",
+  "updated": "2026-04-07",
+  "skills": {
+    "domain-advisor": {
+      "type": "core",
+      "description": "Plan experiments using past knowledge"
+    },
+    "domain-retrospective": {
+      "type": "core",
+      "description": "Document findings as reusable skills"
+    },
+    "prime-rl-amd-sft-install": {
+      "type": "result",
+      "description": "Validated AMD ROCm SFT install path for PRIME-RL on MI210 / gfx90a"
+    },
+    "prime-rl-amd-rl-mi210": {
+      "type": "result",
+      "description": "Validated AMD ROCm single-node RL path for PRIME-RL on MI210 / gfx90a"
+    }
+  },
+  "paths": {
+    "reports": "training_reports/",
+    "experiment_log": "references/experiment-log.md",
+    "troubleshooting": "references/troubleshooting.md",
+    "templates": "templates/"
+  }
+}

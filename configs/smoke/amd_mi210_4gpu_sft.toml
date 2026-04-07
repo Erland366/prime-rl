@@ -1,0 +1,27 @@
+output_dir = "outputs/amd_mi210_4gpu_sft_smoke"
+max_steps = 8
+
+[deployment]
+type = "single_node"
+num_gpus = 4
+gpus_per_node = 4
+
+[wandb]
+project = "prime-rl"
+name = "amd-mi210-4gpu-sft-smoke"
+
+[model]
+name = "PrimeIntellect/Qwen3-1.7B"
+attn = "sdpa"
+cp = 1
+seq_len = 1024
+
+[data]
+type = "sft"
+name = "PrimeIntellect/Reverse-Text-SFT"
+batch_size = 8
+micro-batch-size = 1
+seq_len = 1024
+
+[optim]
+lr = 2e-5
