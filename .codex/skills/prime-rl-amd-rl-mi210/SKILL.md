@@ -35,6 +35,7 @@ Do NOT use when:
 - You need a stock-wheel `vllm` recipe without local source edits
 - You need a validated AMD context-parallel path beyond `cp = 1`
 - You need to assume the external `reverse-text` package works on the machine
+- You have not verified that the active editable `vllm` path resolves from shared storage rather than a node-local `/tmp` tree
 
 ## Results Summary
 
@@ -53,6 +54,15 @@ Do NOT use when:
 ## Recommended Practice
 
 Use the repo smoke script with explicit ROCm environment variables, local loopback proxy exclusions, and the local smoke environment module.
+
+Before treating a new-node failure as a hardware or cluster regression, verify the active editable `vllm` resolution:
+
+```bash
+python -m pip show vllm
+python -c "import vllm; print(vllm.__file__, vllm.__version__)"
+```
+
+If the editable project location points at `/tmp/...`, the environment is not portable across nodes and must be reinstalled from shared storage first.
 
 ### Step 1: Use the validated environment
 
@@ -93,9 +103,12 @@ Use at least `96G`, and preferably `128G`, of Slurm job memory for overnight run
 | External `reverse-text` env dependency | Package access was unavailable from this machine | Keep a local smoke environment module for AMD bring-up |
 | Localhost inference requests failed or hit proxy responses | Host proxy vars captured loopback traffic | Set both `NO_PROXY` and `no_proxy` for `127.0.0.1,localhost` |
 | vLLM chat-completion logprobs crashed on ROCm | Triton/Inductor `KernelMetadata.cluster_dims` failure in logprob helper | Keep `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` eager in the editable ROCm checkout |
+| `primerl` worked on one node and failed on another | Editable `vllm` metadata pointed at a node-local `/tmp` source tree instead of shared storage | Treat editable source paths as part of the runtime contract; verify `pip show vllm` before blaming cluster or GPU differences |
+| Shared `vllm` rebuild still regressed on ROCm | The shared checkout was missing the previously validated eager logprob workaround | Portability requires both the right `vllm` version and the ROCm-specific patch state in the active checkout |
 | Trainer loss helper compile crash | Same ROCm Triton metadata failure in `selective_log_softmax` / `compute_entropy` | Skip `torch.compile` for these helpers on ROCm |
 | `transformers.core_model_loading` import failures | ROCm `vllm` install downgraded `transformers` to `4.57.6` | PRIME-RL must fall back cleanly when that helper module is absent |
 | Overnight run killed at periodic checkpoint step `250` | Slurm job had `mem=64G`, and rank `0` was OOM-killed while gathering and writing the HF `weights/step_250` checkpoint during concurrent inference reload | Treat periodic HF weight export as a separate host-memory risk from trainer resume checkpoints; request more RAM or defer HF export until shutdown |
+| Retry run hit distributed watchdog timeouts after an earlier failed repro | Stale trainer or inference processes were still alive on the same GPUs | Clean the node before retrying; do not treat distributed timeouts on a dirty node as conclusive evidence |
 
 ## Configuration
 

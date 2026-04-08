@@ -13,6 +13,35 @@ Each entry should include:
 ---
 
 <!-- New entries go above this line -->
+## 2026-04-08 — PRIME-RL AMD MI210 New-Node Bring-Up Retrospective
+
+**Type:** Retrospective
+**General description:** The higher-RAM MI210 node did not reproduce the old Slurm OOM, but it exposed a non-portable editable `vllm` install and a missing ROCm logprob workaround in the active shared checkout.
+
+### Details
+
+Investigated why the same `primerl` environment failed on a new MI210 node even though the cluster and GPU type were unchanged. The first root cause was environment portability: `primerl` still contained editable `vllm` metadata pointing to `/tmp/vllm-v0.19.0-rocm`, a node-local source path that did not exist on the new machine. This meant the effective runtime was not actually the same across nodes.
+
+Rebuilt the previously working ROCm `vllm` version (`v0.19.0`, commit `2a69949bd`) into shared storage under `forge-workspace/vllm-v0.19.0`, cleaned the stale editable metadata, and confirmed `primerl` now resolved `vllm` from shared storage instead of `/tmp`. After that, the next blocker matched the previously documented MI210 ROCm issue: the active shared `vllm` checkout did not yet contain the eager workaround for `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than`, so inference crashed again with the `KernelMetadata.cluster_dims` Torch Inductor error until the workaround was re-applied.
+
+Once the shared `vllm` tree was patched, the inference server became healthy again and served real logprob-bearing `/v1/chat/completions` requests on the new node. The higher-RAM job did not show the old Slurm cgroup kill signature during these runs: `/sys/fs/cgroup/system.slice/slurmstepd.scope/job_40515/memory.events` remained at `oom 0` and `oom_kill 0`.
+
+The shortened `--ckpt.interval 10` checkpoint probe still did not conclusively answer the original checkpoint question on this node. One attempt was contaminated by stale trainer processes from an earlier failed run, leading to a misleading NCCL watchdog timeout. A later clean rerun was blocked by Hugging Face metadata/network timeouts before inference became fully healthy. So the new-node retrospective changes the diagnosis, but it does not yet produce a final answer on the step-10 checkpoint behavior.
+
+### Key Points
+
+- The new-node failure was not caused by MI210 hardware differences; it was caused by a non-portable editable `vllm` install and missing shared-checkout patch state.
+- The old `64G` Slurm OOM / `SIGKILL` symptom has not been observed on the higher-RAM node so far.
+- For this workflow, "same conda env name" is not enough. The editable source path and local ROCm patch state must also match.
+- Distributed timeouts after failed bring-up are not trustworthy until stale trainer and inference processes are removed from the node.
+
+### Links
+
+- Broken new-node repro: `outputs/amd_mi210_4gpu_pipelinerl_128g_ckpt10_fixed_20260408/`
+- Shared-checkout patched repro: `outputs/amd_mi210_4gpu_pipelinerl_128g_ckpt10_fixed2_20260408/`
+- Clean rerun blocked by network timeouts: `outputs/amd_mi210_4gpu_pipelinerl_128g_ckpt10_clean_20260408/`
+- Shared ROCm vLLM checkout: `/vast/users/qirong.ho/forge-workspace/vllm-v0.19.0/`
+
 ## 2026-04-07 — PRIME-RL AMD MI210 Overnight RL Failure Retrospective
 
 **Type:** Retrospective

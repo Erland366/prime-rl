@@ -18,6 +18,86 @@ This file documents error patterns encountered and their solutions.
 |---------------|---------|-------|----------|
 | (Template) | Describe the error message or behavior | Root cause analysis | Step-by-step fix |
 
+## Editable vLLM install tied to /tmp breaks across nodes
+
+**Added:** 2026-04-08
+**Domain:** research
+
+### Symptom
+
+The same `primerl` environment works on one cluster node but fails on another, even though the GPU type is still MI210 and the repository checkout is unchanged.
+
+Typical signs include:
+
+```text
+ModuleNotFoundError: No module named 'vllm'
+```
+
+or `pip show vllm` reporting an editable project location under `/tmp/...`.
+
+### Cause
+
+The environment is not actually portable if editable package metadata points at a node-local source tree. In the investigated case, `primerl` still contained `vllm` editable metadata pointing to `/tmp/vllm-v0.19.0-rocm`, so moving to a new node changed the effective runtime even though the conda environment name stayed the same.
+
+### Solution
+
+1. Inspect the active package resolution:
+   `python -m pip show vllm`
+2. Check for stale editable metadata in `site-packages`, especially:
+   - `vllm.egg-link`
+   - `__editable__*.pth`
+   - editable finder files
+   - old `direct_url.json`
+3. Reinstall the editable package from shared storage, not `/tmp`.
+4. Remove stale editable metadata that still points to the old node-local path.
+5. Revalidate with:
+   `python -c "import vllm; print(vllm.__file__, vllm.__version__)"`
+
+### Prevention
+
+Do not use node-local editable source trees for cluster workflows that may move across nodes. Keep editable checkouts in shared storage and verify the resolved path before diagnosing hardware or runtime regressions.
+
+### Related
+
+- Skill: `prime-rl-amd-rl-mi210`
+
+## Stale PRIME-RL processes invalidate ROCm repros
+
+**Added:** 2026-04-08
+**Domain:** research
+
+### Symptom
+
+A later retry shows confusing trainer or NCCL failures after an earlier RL bring-up already failed.
+
+Typical symptoms include:
+
+```text
+ProcessGroupNCCL watchdog caught collective operation timeout
+```
+
+or inexplicable hangs while GPUs appear busy from an earlier attempt.
+
+### Cause
+
+Failed RL bring-up can leave trainer or inference processes alive on the same GPUs. A later repro then runs on a dirty node, so the resulting timeout or hang is not a clean signal about the current code or configuration.
+
+### Solution
+
+1. Before retrying, inspect the node for leftover PRIME-RL or vLLM processes:
+   `ps -ef | rg 'PRIME-RL::|VLLM::EngineCore|torchrun --role=trainer'`
+2. Terminate stale trainer, inference, and engine processes from earlier failed runs.
+3. Confirm the node is clean before launching the next repro.
+4. Only treat the next failure as diagnostic once process cleanup is verified.
+
+### Prevention
+
+After any failed RL validation, clean up stale trainer and inference processes before changing hypotheses. Otherwise a later distributed timeout may be a contamination artifact, not a real regression.
+
+### Related
+
+- Skill: `prime-rl-amd-rl-mi210`
+
 ## Slurm cgroup OOM during RL weight checkpoint on MI210
 
 **Added:** 2026-04-07
