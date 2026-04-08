@@ -48,6 +48,7 @@ Do NOT use when:
 | Orchestrator batch size | `8` | Validated |
 | Rollouts per example | `4` | Validated |
 | Clean validation | `MAX_STEPS=2` | Rollout + train + broadcast + final checkpoint passed |
+| Overnight status at `64G` Slurm RAM | Failed | Trainer hit a Slurm cgroup OOM during periodic HF weight export at step `250` |
 
 ## Recommended Practice
 
@@ -78,6 +79,12 @@ MAX_STEPS=15000 \
 bash scripts/run_amd_smoke_rl.sh
 ```
 
+### Step 4: Size host RAM for overnight runs, or avoid periodic HF weight exports
+
+For the validated MI210 RL path, do not assume a short clean run proves the overnight checkpoint policy is safe. The live RL loop can exceed a small Slurm host-memory reservation when the trainer gathers a full HF checkpoint to CPU while the inference engine is also reloading broadcast weights.
+
+Use at least `96G`, and preferably `128G`, of Slurm job memory for overnight runs if periodic HF `weights/step_*` exports remain enabled. If you want the safer policy, keep periodic trainer resume checkpoints but defer HF `weights/step_*` export until final shutdown.
+
 ## Failure Modes
 
 | What Failed | Why | Lesson Learned |
@@ -88,6 +95,7 @@ bash scripts/run_amd_smoke_rl.sh
 | vLLM chat-completion logprobs crashed on ROCm | Triton/Inductor `KernelMetadata.cluster_dims` failure in logprob helper | Keep `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` eager in the editable ROCm checkout |
 | Trainer loss helper compile crash | Same ROCm Triton metadata failure in `selective_log_softmax` / `compute_entropy` | Skip `torch.compile` for these helpers on ROCm |
 | `transformers.core_model_loading` import failures | ROCm `vllm` install downgraded `transformers` to `4.57.6` | PRIME-RL must fall back cleanly when that helper module is absent |
+| Overnight run killed at periodic checkpoint step `250` | Slurm job had `mem=64G`, and rank `0` was OOM-killed while gathering and writing the HF `weights/step_250` checkpoint during concurrent inference reload | Treat periodic HF weight export as a separate host-memory risk from trainer resume checkpoints; request more RAM or defer HF export until shutdown |
 
 ## Configuration
 
@@ -101,6 +109,9 @@ context_parallelism: 1
 deployment:
   num_infer_gpus: 1
   num_train_gpus: 3
+slurm_memory:
+  minimum_recommended: 96G
+  preferred_for_overnight: 128G
 seq_len: 256
 orchestrator_batch_size: 8
 rollouts_per_example: 4

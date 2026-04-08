@@ -13,6 +13,33 @@ Each entry should include:
 ---
 
 <!-- New entries go above this line -->
+## 2026-04-07 — PRIME-RL AMD MI210 Overnight RL Failure Retrospective
+
+**Type:** Retrospective
+**General description:** The overnight MI210 RL run trained correctly for hours but was killed by the Slurm memory cgroup during the periodic HF weight checkpoint at step 250.
+
+### Details
+
+Investigated the failed overnight run in `outputs/amd_mi210_4gpu_rl_overnight_20260407/` after the trainer exited with `Signal 9 (SIGKILL)` on rank 0 at `2026-04-07 16:37:26 UTC`. The trainer-side `.distcp` checkpoint for `step_250` completed successfully, but the separate HF-compatible weight export under `weights/step_250/` remained empty.
+
+The decisive host evidence came from the Slurm cgroup for job `40407`. The job was launched with a hard `64G` memory reservation, and `/sys/fs/cgroup/system.slice/slurmstepd.scope/job_40407/memory.events` recorded `oom_kill 1`. This rules out an application-level exception as the primary cause and indicates a host RAM kill by the scheduler.
+
+The timing matches the heaviest checkpoint phase. The trainer entered `Saving weight checkpoint at step 250` immediately after the regular trainer checkpoint completed. That path gathers the full model weights to CPU on rank 0 before writing sharded safetensors. At nearly the same time, the inference engine was still handling the filesystem broadcast for `step_250`, including checkpoint prefetch and weight reload. The combined resident memory of trainer checkpoint materialization plus inference reload appears to have exceeded the `64G` Slurm limit.
+
+### Key Points
+
+- The validated MI210 RL path remains correct for rollout, training, filesystem broadcast, and short clean shutdown.
+- The overnight failure was operational, not algorithmic: a Slurm cgroup OOM kill during the periodic HF weight export.
+- The regular trainer checkpoint path is not the failing part; the failing part is the additional HF `weights/step_*` export done while the live RL system is still running.
+- A short validation run can pass even when the overnight periodic checkpoint policy is unsafe, because the final weight export happens after the rest of the run is winding down.
+
+### Links
+
+- Overnight run: `outputs/amd_mi210_4gpu_rl_overnight_20260407/`
+- Validation run: `outputs/amd_mi210_4gpu_rl_validate_20260407h/`
+- Trainer checkpoint code: `src/prime_rl/trainer/ckpt.py`
+- Weight gathering code: `src/prime_rl/trainer/weights.py`
+
 ## 2026-04-07 — PRIME-RL AMD MI210 RL Bring-Up Retrospective
 
 **Type:** Retrospective

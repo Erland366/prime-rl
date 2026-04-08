@@ -18,6 +18,48 @@ This file documents error patterns encountered and their solutions.
 |---------------|---------|-------|----------|
 | (Template) | Describe the error message or behavior | Root cause analysis | Step-by-step fix |
 
+## Slurm cgroup OOM during RL weight checkpoint on MI210
+
+**Added:** 2026-04-07
+**Domain:** research
+
+### Symptom
+
+An overnight RL run trains normally, then the trainer dies during checkpointing with:
+
+```text
+Signal 9 (SIGKILL) received by PID ...
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError
+```
+
+The run may still have a complete trainer `.distcp` checkpoint, while the matching `weights/step_*` directory is empty or incomplete.
+
+### Cause
+
+This can happen when the Slurm job memory reservation is too small for the periodic HF weight export. On the validated MI210 RL path, the trainer checkpoint manager writes two different artifacts:
+
+1. the regular trainer resume checkpoint
+2. a separate HF-compatible weight checkpoint that gathers the full model to CPU on rank 0 before writing sharded safetensors
+
+If the inference engine is also reloading broadcast weights at the same time, the combined host RAM can exceed the job's Slurm cgroup memory limit. In the investigated failure, job `40407` had `mem=64G`, and the job cgroup recorded `oom_kill 1`.
+
+### Solution
+
+1. Confirm the failure mode with Slurm cgroup evidence:
+   `cat /sys/fs/cgroup/system.slice/slurmstepd.scope/job_<JOBID>/memory.events`
+2. Check whether the trainer checkpoint exists but `weights/step_*` is missing or empty.
+3. Increase the Slurm memory request for overnight RL runs, preferably to `96G` or `128G`.
+4. Prefer periodic trainer resume checkpoints without periodic HF `weights/step_*` exports during the live RL run.
+5. If HF weights are needed, write them only at the end after inference and orchestrator shutdown.
+
+### Prevention
+
+Do not treat a successful short validation run as proof that the overnight checkpoint policy is safe. The CPU-memory peak from periodic HF weight export can appear only later under the full live RL loop. On this MI210 setup, size the Slurm memory budget for concurrent trainer checkpointing and inference reload, or disable periodic HF weight exports during training.
+
+### Related
+
+- Skill: `prime-rl-amd-rl-mi210`
+
 ## ring_flash_attn import failure on AMD
 
 **Added:** 2026-04-07
