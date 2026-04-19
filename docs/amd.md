@@ -92,6 +92,23 @@ MAX_STEPS=4 RUN_NAME=amd-rl-validate bash scripts/run_amd_smoke_rl.sh
 MODEL_NAME=Qwen/Qwen3-1.7B MAX_STEPS=8 bash scripts/run_amd_smoke_rl.sh
 ```
 
+For the locally validated mini GLM MoE smoke on `4x MI210`, use the same launcher shape with explicit MoE-safe overrides:
+
+```bash
+python -m prime_rl.entrypoints.rl \
+  @ configs/smoke/amd_mi210_4gpu_rl.toml \
+  --model.name Erland/mini-glm-moe \
+  --trainer.model.impl custom \
+  --trainer.model.no-moe-use-grouped-mm \
+  --max-steps 12 \
+  --seq-len 256 \
+  --orchestrator.batch_size 8 \
+  --orchestrator.rollouts_per_example 4 \
+  --orchestrator.sampling.max-completion-tokens 32 \
+  --inference.gpu_memory_utilization 0.65 \
+  --inference.model.max_model_len 256
+```
+
 This validates the local RL launcher, orchestrator, trainer, and vLLM inference path on MI210. It does not validate external Hub environment installation.
 
 ## Quick Start
@@ -172,6 +189,8 @@ This path was validated to complete successfully on MI210.
 - PRIME platform monitoring is optional. Local trainer startup should not require `prime_cli` unless Prime monitoring is explicitly configured.
 - The RL smoke script forces vLLM's ROCm simple-compile backend to `eager` to avoid a Torch Inductor sampler crash on this MI210 setup.
 - The locally validated ROCm RL path also requires the editable `vllm` install to keep `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` eager. On this machine, the compiled version crashed with `KernelMetadata.cluster_dims` errors during chat-completion logprobs.
+- The locally validated ROCm MoE inference path also requires the editable `vllm` install to keep `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py::grouped_topk` eager on ROCm. The compiled path crashed during EngineCore initialization with the same `KernelMetadata.cluster_dims` Torch Inductor failure.
+- For trainer-side custom MoE on ROCm, set `moe_use_grouped_mm = false` or pass `--trainer.model.no-moe-use-grouped-mm`. The grouped GEMM path currently fails with `RuntimeError: grouped gemm is not supported on ROCM`.
 - The local PRIME-RL tree now falls back cleanly when `transformers.core_model_loading` is absent. This matters for the ROCm RL path because the locally built `vllm` install downgraded `transformers` to `4.57.6`.
 
 ## Known Limits

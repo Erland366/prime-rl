@@ -12,25 +12,45 @@ Usage:
 """
 
 import argparse
+import importlib
 from pathlib import Path
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers import Glm4MoeForCausalLM as HFGlm4MoeForCausalLM
-from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
-    Qwen3_5MoeForConditionalGeneration as HFQwen3_5MoeVLM,
-)
 
 from prime_rl.trainer.models.glm4_moe import Glm4MoeConfig
 from prime_rl.trainer.models.glm4_moe import Glm4MoeForCausalLM as PrimeRLGlm4MoeForCausalLM
 from prime_rl.trainer.models.layers.lm_head import inject_prime_lm_head
 from prime_rl.trainer.models.minimax_m2 import MiniMaxM2Config
 from prime_rl.trainer.models.minimax_m2 import MiniMaxM2ForCausalLM as PrimeRLMiniMaxM2ForCausalLM
-from prime_rl.trainer.models.qwen3_5_moe import Qwen3_5MoeForCausalLM as PrimeRLQwen3_5MoeVLM
 from prime_rl.utils.logger import setup_logger
 from prime_rl.utils.utils import default_dtype
 
 setup_logger("info")
+
+
+def _load_optional_qwen3_5_moe_vlm():
+    module_name = "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe"
+    if importlib.util.find_spec(module_name) is None:
+        raise RuntimeError(
+            f"{module_name} is not available in the current transformers install. "
+            "Use a newer transformers build before selecting --arch qwen3_5_moe_vlm."
+        )
+    module = importlib.import_module(module_name)
+    return module.Qwen3_5MoeForConditionalGeneration
+
+
+def _load_optional_prime_qwen3_5_moe_vlm():
+    module_name = "prime_rl.trainer.models.qwen3_5_moe"
+    hf_module_name = "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe"
+    if importlib.util.find_spec(hf_module_name) is None:
+        raise RuntimeError(
+            f"{hf_module_name} is not available in the current transformers install. "
+            "Use a newer transformers build before selecting --arch qwen3_5_moe_vlm."
+        )
+    module = importlib.import_module(module_name)
+    return module.Qwen3_5MoeForCausalLM
 
 
 def _qwen3_5_moe_vlm_config():
@@ -132,8 +152,8 @@ ARCH_PRESETS = {
     },
     "qwen3_5_moe_vlm": {
         "config_fn": _qwen3_5_moe_vlm_config,
-        "hf_model_class": HFQwen3_5MoeVLM,
-        "prime_model_class": PrimeRLQwen3_5MoeVLM,
+        "hf_model_class": _load_optional_qwen3_5_moe_vlm,
+        "prime_model_class": _load_optional_prime_qwen3_5_moe_vlm,
         "tokenizer_source": "Qwen/Qwen3.5-35B-A3B",
         "is_vlm": True,
     },
@@ -144,6 +164,8 @@ ARCH_PRESETS = {
 def _create_hf_model(preset, config):
     """Create an HF model from a preset and config."""
     hf_cls = preset["hf_model_class"]
+    if callable(hf_cls) and not isinstance(hf_cls, type):
+        hf_cls = hf_cls()
     if hf_cls is not None:
         return hf_cls(config)
     return AutoModelForCausalLM.from_config(config, trust_remote_code=True)
@@ -152,6 +174,8 @@ def _create_hf_model(preset, config):
 def _load_hf_model(preset, model_dir, config):
     """Load an HF model from a preset and directory."""
     hf_cls = preset["hf_model_class"]
+    if callable(hf_cls) and not isinstance(hf_cls, type):
+        hf_cls = hf_cls()
     if hf_cls is not None:
         return hf_cls.from_pretrained(str(model_dir), config=config)
     return AutoModelForCausalLM.from_pretrained(str(model_dir), config=config, trust_remote_code=True)
@@ -160,6 +184,8 @@ def _load_hf_model(preset, model_dir, config):
 def _create_hf_model_from_config(preset, config):
     """Create an empty HF model from config (for roundtrip verification)."""
     hf_cls = preset["hf_model_class"]
+    if callable(hf_cls) and not isinstance(hf_cls, type):
+        hf_cls = hf_cls()
     if hf_cls is not None:
         return hf_cls._from_config(config)
     return AutoModelForCausalLM.from_config(config, trust_remote_code=True)
@@ -198,6 +224,9 @@ def create(arch: str, output_dir: Path) -> None:
 def verify(arch: str, model_dir: Path) -> None:
     preset = ARCH_PRESETS[arch]
     is_vlm = preset.get("is_vlm", False)
+    prime_model_class = preset["prime_model_class"]
+    if callable(prime_model_class) and not isinstance(prime_model_class, type):
+        prime_model_class = prime_model_class()
     print(f"Verifying HF <-> PrimeRL roundtrip for {model_dir}...")
 
     trust_remote_code = preset["hf_model_class"] is None
@@ -211,7 +240,7 @@ def verify(arch: str, model_dir: Path) -> None:
 
     hf_model = _load_hf_model(preset, model_dir, config).to(device="cuda", dtype=torch.float32)
     with torch.device("cuda"), default_dtype(torch.float32):
-        prime_model = preset["prime_model_class"]._from_config(config)
+        prime_model = prime_model_class._from_config(config)
 
     with torch.no_grad():
         state_dict = hf_model.state_dict()
@@ -242,7 +271,7 @@ def verify(arch: str, model_dir: Path) -> None:
 
     # Roundtrip weight conversion: HF -> PrimeRL -> HF
     # Normalize both through the same roundtrip to handle expert format differences
-    prime_cls = preset["prime_model_class"]
+    prime_cls = prime_model_class
     with torch.no_grad():
         roundtrip_sd = prime_cls.convert_to_hf(dict(prime_model.state_dict()))
         orig_sd = dict(hf_model.state_dict())
@@ -251,7 +280,7 @@ def verify(arch: str, model_dir: Path) -> None:
 
     for key in orig_sd:
         assert key in roundtrip_sd, f"Missing key after roundtrip: {key}"
-        assert torch.equal(orig_sd[key], roundtrip_sd[key]), f"Roundtrip mismatch at {key}"
+        assert torch.equal(orig_sd[key].cpu(), roundtrip_sd[key].cpu()), f"Roundtrip mismatch at {key}"
     print("  HF -> PrimeRL -> HF weight roundtrip verified")
 
     print("  Verification passed.")

@@ -206,6 +206,39 @@ Do not treat "server started" as sufficient validation on ROCm. Always test the 
 
 - Skill: `prime-rl-amd-rl-mi210`
 
+## vLLM ROCm MoE grouped-topk compile crash on MI210
+
+**Added:** 2026-04-19
+**Domain:** research
+
+### Symptom
+
+Local ROCm inference for a MoE model crashes during EngineCore startup before serving requests:
+
+```text
+torch._inductor.exc.InductorError: AttributeError: 'KernelMetadata' object has no attribute 'cluster_dims'
+```
+
+The stack goes through `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py`.
+
+### Cause
+
+On this MI210 / ROCm setup, vLLM's compiled MoE `grouped_topk` router hits the same Triton/Inductor metadata assumption that already affects the compiled logprob helper.
+
+### Solution
+
+1. Use the editable ROCm `vllm` checkout instead of assuming a stock wheel is sufficient.
+2. Keep `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py::grouped_topk` eager on ROCm.
+3. Revalidate `/health` and `/v1/models` after restarting inference before retrying the full RL loop.
+
+### Prevention
+
+For ROCm MoE bring-up, do not treat dense-model inference success as evidence that the MoE path is safe. The router kernels add a separate ROCm compile surface.
+
+### Related
+
+- Skill: `prime-rl-amd-rl-mi210`
+
 ## transformers.core_model_loading missing after ROCm vLLM install
 
 **Added:** 2026-04-07
@@ -233,6 +266,39 @@ The locally built ROCm `vllm` install downgraded `transformers` to `4.57.6`, whe
 ### Prevention
 
 Do not hard-code imports against optional or version-sensitive internals from `transformers` without a compatibility fallback.
+
+## Trainer MoE grouped GEMM unsupported on ROCm
+
+**Added:** 2026-04-19
+**Domain:** research
+
+### Symptom
+
+The trainer starts successfully on MI210, enters model setup or the first RL step, and then fails with:
+
+```text
+RuntimeError: grouped gemm is not supported on ROCM
+```
+
+The stack goes through PRIME-RL's custom MoE layer and eventually into `torch._grouped_mm`.
+
+### Cause
+
+The custom MoE trainer path defaults to grouped GEMM, but the `torch._grouped_mm` implementation used here is not available on ROCm.
+
+### Solution
+
+1. Disable grouped GEMM for the trainer by setting `moe_use_grouped_mm = false`.
+2. On the CLI, pass `--trainer.model.no-moe-use-grouped-mm`.
+3. Re-run the smoke job and confirm the trainer enters the training loop instead of failing during MoE dispatch.
+
+### Prevention
+
+Treat `moe_use_grouped_mm` as a backend-sensitive optimization. On ROCm MI210, assume the safe default is the non-grouped fallback unless you have revalidated grouped GEMM support.
+
+### Related
+
+- Skill: `prime-rl-amd-rl-mi210`
 
 ### Related
 

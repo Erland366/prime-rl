@@ -13,6 +13,35 @@ Each entry should include:
 ---
 
 <!-- New entries go above this line -->
+## 2026-04-19 — PRIME-RL AMD MI210 Async-4 Overnight Reverse-Text Retrospective
+
+**Type:** Retrospective
+**General description:** The async-4 MI210 overnight run completed end-to-end and increased sequence length plus off-policy depth, but it never achieved nonzero reward and mostly generated gibberish by the end.
+
+### Details
+
+Ran a local single-node RL overnight job on `4x AMD Instinct MI210` using `1` inference GPU and `3` training GPUs with `Qwen/Qwen2.5-3B-Instruct`, `sdpa`, `cp = 1`, shared W&B logging, and explicit async overlap. The final launch used `max_async_level = 4`, `trainer.model.seq_len = 512`, `orchestrator.seq_len = 512`, `orchestrator.batch_size = 16`, `orchestrator.rollouts_per_example = 4`, `orchestrator.max_inflight_rollouts = 128`, `orchestrator.sampling.max_completion_tokens = 256`, and longer local `smoke-reverse-text` examples with `min_length = 64` and `max_length = 128`.
+
+To avoid the previously documented overnight host OOM mode, the run kept periodic resume checkpoints but disabled periodic HF master-weight gathering with `trainer.ckpt.skip_gather_master_weights = true`, while retaining `ckpt.interval = 200` and `keep_last = 1`.
+
+Operationally, the run was stable. The launcher, inference server, orchestrator, and trainer all started cleanly, W&B shared mode synced successfully, and the full `1000` training steps completed. Trainer throughput settled around `320-329 tokens/s`, peak trainer memory reached `28.3 GiB`, and the trainer finished with a final checkpoint and clean shutdown. On the orchestrator side, the async target was reached and maintained: from early in the run onward it stayed at `Async Level: 4`.
+
+The main negative result is that the run did not learn. Reward remained `0.0000` for all `1000` logged orchestrator steps. As the run progressed, sequence length increased and often hit the generation cap, but rollout quality degraded sharply: late in training the orchestrator was repeatedly logging `13-16 / 16` rollouts as gibberish. Off-policy pressure also rose well beyond the intended async gap because stale in-flight requests kept accumulating across updates. `Max. Off-Policy Level` reached `8` by step `12` and stayed there for most of the run, with repeated cancellation bursts of old rollout requests.
+
+### Key Points
+
+- The AMD MI210 local async RL path is stable enough for a real overnight run with W&B, periodic resume checkpoints, and clean final shutdown.
+- Increasing sequence length and in-flight rollout depth did increase memory and async pressure, but only modestly increased trainer VRAM: peak trainer memory rose to `28.3 GiB`.
+- The overnight configuration optimized for async overlap rather than learning quality. The run saturated the toy reverse-text environment with long, mostly gibberish completions and never achieved positive reward.
+- `max_async_level = 4` did not cap the reported off-policy depth in this setup because `max_off_policy_steps` remained at its default and stale requests accumulated across weight updates.
+- Skipping periodic HF master-weight gathering appears to be the right operational safeguard for long MI210 runs on this machine.
+
+### Links
+
+- Overnight run: `outputs/amd-mi210-overnight-async4-vram512-20260418_181258/`
+- W&B: `https://wandb.ai/erlandpg/prime-rl/runs/3f274068efc043fbacb01402904034ae`
+- Status snapshot: `outputs/amd-mi210-overnight-async4-vram512-20260418_181258/STATUS.md`
+
 ## 2026-04-08 — PRIME-RL AMD MI210 New-Node Bring-Up Retrospective
 
 **Type:** Retrospective
@@ -96,6 +125,33 @@ The bring-up required a local `smoke-reverse-text` environment module because th
 
 - Validation run: `outputs/amd_mi210_4gpu_rl_validate_20260407h/`
 - Overnight run: `outputs/amd_mi210_4gpu_rl_overnight_20260407/`
+- Notes: `docs/amd.md`
+
+## 2026-04-19 — PRIME-RL AMD MI210 Mini GLM MoE RL Smoke
+
+**Type:** Retrospective
+**General description:** Validated the prebuilt mini GLM MoE RL smoke on `4x MI210` after applying the missing ROCm MoE inference and trainer fallbacks.
+
+### Details
+
+Started from the mirrored Hugging Face model `Erland/mini-glm-moe` and ran the local `1 infer + 3 train` MI210 RL smoke path with `seq_len = 256`, `orchestrator.batch_size = 8`, `rollouts_per_example = 4`, `max_completion_tokens = 32`, and W&B shared mode.
+
+The first MoE run failed on the inference side even though the existing ROCm logprob eager workaround was already in place. vLLM crashed during EngineCore initialization in `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py::grouped_topk` with the same Torch Inductor `KernelMetadata.cluster_dims` error that had already been seen in other ROCm-compiled helpers. The working fix was to keep that grouped-topk router eager in the editable ROCm `vllm` checkout, not just inside the local PRIME-RL process.
+
+Once inference was healthy, the next blocker moved to the trainer. PRIME-RL's custom MoE layer attempted to use `torch._grouped_mm`, which failed on MI210 with `RuntimeError: grouped gemm is not supported on ROCM`. The validated trainer-side fix was to disable grouped GEMM explicitly via `--trainer.model.no-moe-use-grouped-mm`.
+
+With both fallbacks in place, the `12`-step `Erland/mini-glm-moe` smoke run completed end to end, including rollout generation, trainer updates, final checkpoint writing, and W&B sync. Peak trainer memory reached `6.2 GiB` per training GPU.
+
+### Key Points
+
+- Dense-model ROCm validation was not sufficient for MoE. The MoE router added a second vLLM compile surface that also needed an eager fallback.
+- On MI210, trainer-side custom MoE currently requires `moe_use_grouped_mm = false`.
+- The validated `Erland/mini-glm-moe` smoke configuration now works end to end on `4x MI210`.
+
+### Links
+
+- Successful run: `outputs/amd-mi210-m3-erland-mini-glm-moe-rocmfix4-20260419_104947/`
+- W&B: `https://wandb.ai/erlandpg/prime-rl/runs/b8483a42613c4c1ba3a86769b55c1dc4`
 - Notes: `docs/amd.md`
 
 ## 2026-04-07 — PRIME-RL AMD MI210 Install Retrospective

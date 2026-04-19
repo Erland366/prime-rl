@@ -50,6 +50,16 @@ Do NOT use when:
 | Rollouts per example | `4` | Validated |
 | Clean validation | `MAX_STEPS=2` | Rollout + train + broadcast + final checkpoint passed |
 | Overnight status at `64G` Slurm RAM | Failed | Trainer hit a Slurm cgroup OOM during periodic HF weight export at step `250` |
+| Async-pressure overnight run | Completed | `1000` local steps with clean shutdown and W&B sync |
+| Async-pressure trainer seq_len | `512` | Explicit `trainer.model.seq_len = 512` |
+| Async-pressure orchestrator seq_len | `512` | Explicit `orchestrator.seq_len = 512` |
+| Async-pressure batch size | `16` | With `max_inflight_rollouts = 128` |
+| Async-pressure max completion tokens | `256` | Reverse-text smoke environment |
+| Async-pressure peak trainer memory | `28.3 GiB` | Per training GPU on MI210 |
+| Async-pressure reward outcome | `0.0000` | Stayed at zero for all `1000` orchestrator steps |
+| Async-pressure off-policy outcome | `Max. Off-Policy Level = 8` | Even though `max_async_level = 4` |
+| Mini GLM MoE smoke | Completed | `Erland/mini-glm-moe` on `1 infer + 3 train` with ROCm MoE fallbacks |
+| Mini GLM MoE peak trainer memory | `6.2 GiB` | Per training GPU on MI210 |
 
 ## Recommended Practice
 
@@ -89,11 +99,64 @@ MAX_STEPS=15000 \
 bash scripts/run_amd_smoke_rl.sh
 ```
 
-### Step 4: Size host RAM for overnight runs, or avoid periodic HF weight exports
+### Step 4: Use MoE-specific ROCm fallbacks for mini GLM smoke runs
+
+For the validated `Erland/mini-glm-moe` smoke on MI210, keep inference on the editable ROCm `vllm` checkout and disable trainer grouped GEMM:
+
+```bash
+python -m prime_rl.entrypoints.rl \
+  @ configs/smoke/amd_mi210_4gpu_rl.toml \
+  --model.name Erland/mini-glm-moe \
+  --trainer.model.impl custom \
+  --trainer.model.no-moe-use-grouped-mm \
+  --max-steps 12 \
+  --seq-len 256 \
+  --orchestrator.batch_size 8 \
+  --orchestrator.rollouts_per_example 4 \
+  --orchestrator.sampling.max-completion-tokens 32 \
+  --inference.gpu_memory_utilization 0.65 \
+  --inference.model.max_model_len 256
+```
+
+This run was validated end to end on `4x MI210`. It requires the editable ROCm `vllm` checkout to keep both `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` and `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py::grouped_topk` eager on ROCm.
+
+### Step 5: Size host RAM for overnight runs, or avoid periodic HF weight exports
 
 For the validated MI210 RL path, do not assume a short clean run proves the overnight checkpoint policy is safe. The live RL loop can exceed a small Slurm host-memory reservation when the trainer gathers a full HF checkpoint to CPU while the inference engine is also reloading broadcast weights.
 
 Use at least `96G`, and preferably `128G`, of Slurm job memory for overnight runs if periodic HF `weights/step_*` exports remain enabled. If you want the safer policy, keep periodic trainer resume checkpoints but defer HF `weights/step_*` export until final shutdown.
+
+### Step 6: Use the async-pressure overnight mode only for systems validation
+
+If the goal is to stress async overlap and long-run stability on MI210, the following local overrides are valid:
+
+```bash
+python -m prime_rl.entrypoints.rl \
+  @ configs/smoke/amd_mi210_4gpu_rl.toml \
+  --max-steps 1000 \
+  --max_async_level 4 \
+  --trainer.model.seq-len 512 \
+  --orchestrator.seq-len 512 \
+  --orchestrator.batch-size 16 \
+  --orchestrator.rollouts-per-example 4 \
+  --orchestrator.max-inflight-rollouts 128 \
+  --orchestrator.sampling.max-completion-tokens 256 \
+  --orchestrator.env.0.args.min_length 64 \
+  --orchestrator.env.0.args.max_length 128 \
+  --inference.gpu-memory-utilization 0.85 \
+  --inference.model.max-model-len 512 \
+  --ckpt.interval 200 \
+  --ckpt.keep-last 1 \
+  --trainer.ckpt.skip-gather-master-weights true
+```
+
+Use this mode for operational validation only. It proved that the MI210 path can survive an overnight async run, but it did **not** produce useful reward on `smoke-reverse-text`.
+
+### Step 7: Treat `max_async_level` and observed off-policy depth separately
+
+`max_async_level = 4` controls how far the orchestrator is allowed to lag the trainer checkpoint boundary, but it does **not** guarantee that logged `Max. Off-Policy Level` will stay at `4`. In the overnight async-pressure run, stale in-flight requests accumulated across updates and the observed off-policy depth reached `8`.
+
+If the objective is learning quality rather than async stress, cap or reduce off-policyness by lowering queue depth, shortening completions, or reducing `max_off_policy_steps`.
 
 ## Failure Modes
 
@@ -103,12 +166,16 @@ Use at least `96G`, and preferably `128G`, of Slurm job memory for overnight run
 | External `reverse-text` env dependency | Package access was unavailable from this machine | Keep a local smoke environment module for AMD bring-up |
 | Localhost inference requests failed or hit proxy responses | Host proxy vars captured loopback traffic | Set both `NO_PROXY` and `no_proxy` for `127.0.0.1,localhost` |
 | vLLM chat-completion logprobs crashed on ROCm | Triton/Inductor `KernelMetadata.cluster_dims` failure in logprob helper | Keep `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` eager in the editable ROCm checkout |
+| vLLM MoE inference crashed during EngineCore startup on ROCm | Triton/Inductor `KernelMetadata.cluster_dims` failure in `grouped_topk_router.py::grouped_topk` | Keep the MoE grouped-topk router eager in the editable ROCm `vllm` checkout |
 | `primerl` worked on one node and failed on another | Editable `vllm` metadata pointed at a node-local `/tmp` source tree instead of shared storage | Treat editable source paths as part of the runtime contract; verify `pip show vllm` before blaming cluster or GPU differences |
 | Shared `vllm` rebuild still regressed on ROCm | The shared checkout was missing the previously validated eager logprob workaround | Portability requires both the right `vllm` version and the ROCm-specific patch state in the active checkout |
 | Trainer loss helper compile crash | Same ROCm Triton metadata failure in `selective_log_softmax` / `compute_entropy` | Skip `torch.compile` for these helpers on ROCm |
+| Trainer custom MoE failed on MI210 even after inference was fixed | `torch._grouped_mm` raised `RuntimeError: grouped gemm is not supported on ROCM` | Disable grouped GEMM with `moe_use_grouped_mm = false` or `--trainer.model.no-moe-use-grouped-mm` |
 | `transformers.core_model_loading` import failures | ROCm `vllm` install downgraded `transformers` to `4.57.6` | PRIME-RL must fall back cleanly when that helper module is absent |
 | Overnight run killed at periodic checkpoint step `250` | Slurm job had `mem=64G`, and rank `0` was OOM-killed while gathering and writing the HF `weights/step_250` checkpoint during concurrent inference reload | Treat periodic HF weight export as a separate host-memory risk from trainer resume checkpoints; request more RAM or defer HF export until shutdown |
 | Retry run hit distributed watchdog timeouts after an earlier failed repro | Stale trainer or inference processes were still alive on the same GPUs | Clean the node before retrying; do not treat distributed timeouts on a dirty node as conclusive evidence |
+| Async-pressure overnight run on `smoke-reverse-text` produced zero reward | Longer completions, deep rollout queue, and high stale-request pressure pushed the toy environment into mostly gibberish rollouts instead of useful learning | Use this config for systems validation only; for learning, reduce queue depth/off-policyness or switch to a stronger environment |
+| Observed off-policy depth exceeded the requested async level | `max_async_level = 4` was maintained, but `max_off_policy_steps` stayed higher and stale in-flight rollouts accumulated across updates | If you want tighter policy freshness, tune `max_off_policy_steps` and queue depth instead of assuming `max_async_level` alone is sufficient |
 
 ## Configuration
 
@@ -131,9 +198,35 @@ rollouts_per_example: 4
 max_completion_tokens: 32
 ```
 
+```yaml
+# Async-pressure overnight validation mode
+conda_env: primerl
+gpu: AMD Instinct MI210
+gcn_arch: gfx90a
+model: Qwen/Qwen2.5-3B-Instruct
+attention_backend: sdpa
+context_parallelism: 1
+deployment:
+  num_infer_gpus: 1
+  num_train_gpus: 3
+trainer_seq_len: 512
+orchestrator_seq_len: 512
+orchestrator_batch_size: 16
+rollouts_per_example: 4
+max_inflight_rollouts: 128
+max_completion_tokens: 256
+reverse_text_min_length: 64
+reverse_text_max_length: 128
+max_async_level: 4
+ckpt_interval: 200
+ckpt_keep_last: 1
+skip_gather_master_weights: true
+```
+
 ## References
 
 - Related notes: `docs/amd.md`
 - Related launcher: `scripts/run_amd_smoke_rl.sh`
 - Related config: `configs/smoke/amd_mi210_4gpu_rl.toml`
 - Related log entry: `references/experiment-log.md`
+- Related overnight run: `outputs/amd-mi210-overnight-async4-vram512-20260418_181258/`

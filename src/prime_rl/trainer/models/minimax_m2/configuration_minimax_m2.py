@@ -123,7 +123,8 @@ class MiniMaxM2Config(PretrainedConfig):
 
         if self.rope_scaling is not None and "type" in self.rope_scaling:
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
-        self.standardize_rope_params()
+        if hasattr(self, "standardize_rope_params"):
+            self.standardize_rope_params()
 
         # MoE arguments
         self.num_local_experts = num_local_experts

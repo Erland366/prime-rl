@@ -14,6 +14,8 @@ The goal isn't performance. It's catching bugs in modeling code, state dict conv
 
 - At least 1 GPU for steps 1-2, 2 GPUs for step 3 (RL)
 - Architecture presets are defined in `scripts/mini_moe.py`
+- On the local ROCm environment documented in [amd.md](amd.md), `transformers` may be downgraded by the editable `vllm` install. The script now keeps optional Qwen3.5 MoE VLM imports lazy so `glm4_moe` and `minimax_m2` still work even when that module is unavailable.
+- The local `minimax_m2` config also tolerates older `transformers` builds that do not expose `PretrainedConfig.standardize_rope_params()`.
 
 ## Step 1: Create and verify the mini model
 
@@ -54,6 +56,10 @@ uv run python scripts/mini_moe.py --arch glm4_moe --output-dir outputs/weights/s
 ```
 
 A pre-built SFT'd model is available at [samsja/mini-glm-moe](https://huggingface.co/samsja/mini-glm-moe).
+
+On the local MI210 / ROCm path, the mirrored checkpoint [Erland/mini-glm-moe](https://huggingface.co/Erland/mini-glm-moe) was validated instead. That ROCm smoke run also required:
+- the editable ROCm `vllm` checkout to keep `grouped_topk_router.py::grouped_topk` eager
+- `--trainer.model.no-moe-use-grouped-mm` on the trainer side because grouped GEMM is not supported on ROCm in this setup
 
 ## Step 3: RL (reverse-text)
 
