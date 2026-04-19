@@ -193,6 +193,35 @@ This path was validated to complete successfully on MI210.
 - For trainer-side custom MoE on ROCm, set `moe_use_grouped_mm = false` or pass `--trainer.model.no-moe-use-grouped-mm`. The grouped GEMM path currently fails with `RuntimeError: grouped gemm is not supported on ROCM`.
 - The local PRIME-RL tree now falls back cleanly when `transformers.core_model_loading` is absent. This matters for the ROCm RL path because the locally built `vllm` install downgraded `transformers` to `4.57.6`.
 
+## ROCm Kernel Fallback Ledger
+
+This section records the concrete optimized paths that did not work on the validated MI210 setup and the fallback path used instead. The goal is to make manual performance or correctness analysis explicit rather than leaving it scattered across troubleshooting notes.
+
+### Optimized paths that actually failed
+
+| Surface | Optimized path that failed | Failure mode on MI210 / ROCm | Fallback used in validated path |
+|---------|-----------------------------|-------------------------------|----------------------------------|
+| vLLM logprob ranking | `vllm/v1/sample/ops/logprobs.py::batched_count_greater_than` compiled path | Torch Inductor / Triton crash: `KernelMetadata.cluster_dims` during logprob-bearing chat completions | Replaced with eager native PyTorch counting logic |
+| vLLM MoE router | `vllm/model_executor/layers/fused_moe/router/grouped_topk_router.py::grouped_topk` compiled path | Same Torch Inductor / Triton `KernelMetadata.cluster_dims` crash during MoE EngineCore startup | Replaced with eager native PyTorch grouped-topk logic |
+| Trainer MoE experts | `torch._grouped_mm` via `moe_use_grouped_mm = true` | `RuntimeError: grouped gemm is not supported on ROCM` | Switched to the non-grouped expert fallback with `moe_use_grouped_mm = false` |
+| RL trainer helper compile path | compiled `selective_log_softmax` / `compute_entropy` helper path | Same ROCm Triton metadata crash family during RL training | Kept these helpers on normal eager PyTorch execution |
+
+### Conservative AMD defaults we used
+
+These were not the same as the kernel failures above. They are the safer validated defaults used on AMD so we did not enter unsupported or unvalidated kernel paths in the first place.
+
+| Surface | Conservative default | Why |
+|---------|----------------------|-----|
+| Attention backend | `sdpa` | This is the validated AMD attention path; other attention kernels were not part of the validated MI210 bring-up |
+| Context parallel attention stack | `model.cp = 1` | Avoids dependence on the ring-flash-attention path on AMD |
+| vLLM simple compile backend | `eager` | The RL smoke path forces this on ROCm to avoid sampler-related Torch Inductor instability |
+
+### Practical reading of the ledger
+
+- If you want to analyze only the paths that were proven broken on this machine, focus on the first table.
+- If you want to reproduce the validated MI210 path exactly, keep both the first-table fallbacks and the second-table conservative defaults.
+- The MoE bring-up required all three MoE-specific fallbacks at once: eager vLLM logprob helper, eager vLLM grouped-topk router, and trainer `moe_use_grouped_mm = false`.
+
 ## Known Limits
 
 - The documented RL smoke path currently depends on a local repo environment module because the external `reverse-text` package was not reachable from this machine.
