@@ -16,7 +16,7 @@ This is not a blanket statement that the full PRIME-RL stack is AMD-supported. T
 - `sdpa` attention backend
 - `model.cp = 1`
 
-The RL path documented here relies on a local repo environment module (`smoke-reverse-text`) instead of the external `reverse-text` package.
+The RL path documented here relies on a local repo environment package (`src/smoke_reverse_text/`) instead of the external `reverse-text` package.
 
 ## 4-GPU Smoke Run
 
@@ -68,7 +68,7 @@ The script:
 - logs into W&B with `WANDB_API_KEY`
 - exports `WANDB_ENTITY=erlandpg`
 - exports both `HIP_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES`
-- exports `PYTHONPATH=/opt/rocm/share/amd_smi:$REPO_ROOT/src` so vLLM can import ROCm's `amdsmi` package and the local `smoke-reverse-text` environment module
+- exports `PYTHONPATH=/opt/rocm/share/amd_smi:$REPO_ROOT/src` so vLLM can import ROCm's `amdsmi` package and the local `smoke-reverse-text` environment package
 - exports `NO_PROXY` and `no_proxy` for `127.0.0.1,localhost` so orchestrator health checks do not get sent through host HTTP proxies
 - launches single-node RL with `3` training GPUs and `1` inference GPU
 
@@ -153,7 +153,7 @@ python -m pip install -e . --no-deps
 3. The extra runtime dependencies needed for the AMD-validated SFT path:
 
 - `transformers==5.5.0`
-- `datasets==4.6.1`
+- `datasets==4.8.4`
 - `liger-kernel`
 - `torchtitan`
 - `dion`

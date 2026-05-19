@@ -1,0 +1,157 @@
+max_steps = 2000
+max_async_level = 8
+seq_len = 512
+
+[deployment]
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 3
+num_infer_gpus = 1
+
+[model]
+name = "Erland/mini-glm-moe"
+
+[weight_broadcast]
+type = "filesystem"
+
+[wandb]
+project = "primerl"
+name = "amd-mi210-mini-glm-moe-smoke"
+shared = true
+
+[log]
+level = "info"
+
+[trainer.model]
+impl = "custom"
+attn = "sdpa"
+optimization_dtype = "float32"
+reduce_dtype = "float32"
+moe_use_grouped_mm = false
+optim_cpu_offload = false
+
+[trainer.tokenizer]
+name = "Erland/mini-glm-moe"
+
+[trainer.optim]
+lr = 3e-6
+weight_decay = 0.01
+
+[trainer.scheduler]
+type = "constant"
+
+[trainer.rollout_transport]
+type = "filesystem"
+
+[trainer.ckpt]
+interval = 250
+
+[trainer.gc]
+interval = 50
+
+[trainer]
+dist_timeout_seconds = 600
+max_concurrent_runs = 1
+
+[orchestrator]
+batch_size = 8
+max_inflight_rollouts = 8
+rollouts_per_example = 4
+max_steps = 12
+max_off_policy_steps = 8
+max_async_level = 1
+seed = 42
+use_token_client = true
+
+[orchestrator.client]
+timeout = 1200
+connect_timeout = 30.0
+base_url = ["http://127.0.0.1:18000/v1"]
+dp_rank_count = 1
+
+[orchestrator.client.extra_headers_from_state]
+X-Session-ID = "example_id"
+
+[orchestrator.sampling]
+temperature = 1.0
+repetition_penalty = 1.0
+max_completion_tokens = 32
+min_tokens = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+enforce = false
+token_id_threshold = 100000
+logprob_offset = 2.0
+
+[[orchestrator.filters]]
+type = "repetition"
+enforce = false
+window = 3000
+prob_threshold = 0.99
+
+[[orchestrator.env]]
+id = "sanity-check"
+num_workers = "auto"
+max_retries = 0
+max_total_completion_tokens = -1
+
+[orchestrator.env.args]
+dataset_path = "openai/gsm8k"
+dataset_name = "main"
+max_num_train_examples = 1024
+max_num_eval_examples = 64
+train_split_name = "train"
+eval_split_name = "test"
+streaming = false
+question_column_name = "question"
+
+[orchestrator.env.extra_env_kwargs]
+max_total_completion_tokens = -1
+max_seq_len = 256
+score_rollouts = true
+
+[orchestrator.buffer]
+easy_fraction = 0.0
+hard_fraction = 0.0
+online_difficulty_filtering = false
+hash_keys = ["task", "prompt"]
+
+[orchestrator.verification]
+enabled = true
+
+[orchestrator.rollout_transport]
+type = "filesystem"
+
+[orchestrator.advantage]
+type = "default"
+
+[orchestrator.optim]
+lr = 1e-4
+
+[orchestrator.ckpt]
+interval = 250
+
+[inference]
+enable_lora = false
+max_loras = 8
+max_cpu_loras = 100
+gpu_memory_utilization = 0.65
+api_server_count = 1
+data_parallel_rpc_port = 13345
+seed = 0
+enable_expert_parallel = false
+enable_eplb = false
+use_deep_gemm = false
+enable_return_routed_experts = false
+
+[inference.server]
+port = 18000
+
+[inference.model]
+max_model_len = 256
+enforce_eager = true
+
+[inference.parallel]
+tp = 1
+dp = 1

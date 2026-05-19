@@ -108,7 +108,7 @@ install_prime_rl() {
     python -m pip install \
         psutil \
         beartype \
-        "datasets==4.6.1" \
+        "datasets==4.8.4" \
         jaxtyping \
         loguru \
         pyarrow \
